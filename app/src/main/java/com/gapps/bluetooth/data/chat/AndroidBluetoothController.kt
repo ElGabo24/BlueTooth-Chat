@@ -66,6 +66,10 @@ class AndroidBluetoothController(
         }
     }
 
+    private val bluetoothBondState = BondStateReceiver {
+        updatePairedDevices()
+    }
+
     private val _isConnected = MutableStateFlow(false)
     override val isConnected: StateFlow<Boolean>
         get() = _isConnected.asStateFlow()
@@ -84,6 +88,7 @@ class AndroidBluetoothController(
 
     private var currentServerSocket: BluetoothServerSocket? = null
     private var currentClientSocket: BluetoothSocket? = null
+    private var deviceOrCommando = false
 
     init {
         updatePairedDevices()
@@ -94,6 +99,10 @@ class AndroidBluetoothController(
                 addAction(BluetoothDevice.ACTION_ACL_CONNECTED)
                 addAction(BluetoothDevice.ACTION_ACL_DISCONNECTED)
             }
+        )
+        context.registerReceiver(
+            bluetoothBondState,
+            IntentFilter(BluetoothDevice.ACTION_BOND_STATE_CHANGED)
         )
     }
 
@@ -158,6 +167,8 @@ class AndroidBluetoothController(
                 throw SecurityException("No BLUETOOTH_CONNECT permission")
             }
 
+            pairWithDevice(device)
+
             val bluetoothDevice = bluetoothAdapter?.getRemoteDevice(device.address)
             bluetoothAdapter?.cancelDiscovery()
 
@@ -175,8 +186,13 @@ class AndroidBluetoothController(
                     BluetoothDataTransferService(socket).also {
                         dataTransferService = it
                         emitAll(
-                            it.listenForIncomingMessages()
-                                .map { ConnectionResult.TransferSucceeded(it) }
+                            if (deviceOrCommando) {
+                                it.readNextMessage()
+                                    .map { ConnectionResult.TransferSucceeded(it) }
+                            } else {
+                                it.listenForIncomingMessages()
+                                    .map { ConnectionResult.TransferSucceeded(it) }
+                            }
                         )
                     }
                 } catch (i: IOException) {
@@ -191,20 +207,32 @@ class AndroidBluetoothController(
         }.flowOn(Dispatchers.IO)
     }
 
-    override suspend fun trySendMessage(message: String): BluetoothMessage? {
-        if (!hasPermission(Manifest.permission.BLUETOOTH_CONNECT)) return null
-        if (dataTransferService == null) return null
+    override fun trySendMessage(message: String): Flow<BluetoothMessage?> {
+        return flow {
+            if (!hasPermission(Manifest.permission.BLUETOOTH_CONNECT)) emit(null)
+            if (dataTransferService == null) emit(null)
 
-        val bluetoothMessage = BluetoothMessage(
-            message = message,
-            senderName = bluetoothAdapter?.name ?: "Unknown name",
-            isFromLocalUser = true
-        )
+            val bluetoothMessage = BluetoothMessage(
+                message = message,
+                senderName = bluetoothAdapter?.name ?: "Unknown name",
+                isFromLocalUser = true
+            )
 
-        dataTransferService?.sendMessage(bluetoothMessage.toByteArray())
+            emit(bluetoothMessage)
 
-        return bluetoothMessage
+            if (deviceOrCommando) {
+                dataTransferService?.sendCommand(message)
+            }else {
+                dataTransferService?.sendMessage(bluetoothMessage.toByteArray())
+            }
+
+        }.flowOn(Dispatchers.IO)
     }
+
+    override fun deviceOrCommando() {
+        deviceOrCommando = deviceOrCommando.not()
+    }
+
 
     override fun closeConnection() {
         currentClientSocket?.close()
@@ -216,7 +244,17 @@ class AndroidBluetoothController(
     override fun release() {
         context.unregisterReceiver(foundDeviceReceiver)
         context.unregisterReceiver(bluetoothStateReciever)
+        context.unregisterReceiver(bluetoothBondState)
         closeConnection()
+    }
+
+    private fun pairWithDevice(device: BluetoothDeviceDomain) {
+        val bluetoothDevice = bluetoothAdapter?.getRemoteDevice(device.address)
+        if (bluetoothDevice?.bondState != BluetoothDevice.BOND_BONDED) {
+            bluetoothDevice?.createBond()
+        } else {
+            Log.d("Bluetooth", "El dispositivo ya está emparejado")
+        }
     }
 
     private fun updatePairedDevices() {

@@ -117,7 +117,8 @@ class MainActivity : ComponentActivity() {
                                 onStartScan = viewModel::startScan,
                                 onStopScan = viewModel::stopScan,
                                 onDeviceClick = viewModel::connectToDevice,
-                                onStartServer = viewModel::waitForIncomingConnections
+                                onStartServer = viewModel::waitForIncomingConnections,
+                                onCheckBluetothCommand = viewModel::deviceOrCommando
                             )
                         }
                     }

@@ -61,7 +61,8 @@ class BluetoothViewModel @Inject constructor(
         bluetoothController.closeConnection()
         _state.update { it.copy(
             isConnected = false,
-            isConnecting = false
+            isConnecting = false,
+            messages = emptyList()
         ) }
     }
 
@@ -72,14 +73,22 @@ class BluetoothViewModel @Inject constructor(
             .listen()
     }
 
+    fun deviceOrCommando() {
+        _state.update { it.copy(isBluetoothCommand = it.isBluetoothCommand.not()) }
+        bluetoothController.deviceOrCommando()
+    }
+
     fun sendMessage(message: String) {
         viewModelScope.launch {
-            val bluetoothMessage = bluetoothController.trySendMessage(message)
-            if (bluetoothMessage != null) {
-                _state.update { it.copy(
-                    messages = it.messages + bluetoothMessage
-                ) }
-            }
+            bluetoothController.trySendMessage(message).onEach { bluetoothMessage ->
+                if (bluetoothMessage != null) {
+                    _state.update {
+                        it.copy(
+                            messages = it.messages + bluetoothMessage
+                        )
+                    }
+                }
+            }.launchIn(viewModelScope)
         }
     }
 
@@ -119,6 +128,7 @@ class BluetoothViewModel @Inject constructor(
             _state.update { it.copy(
                 isConnected = false,
                 isConnecting = false,
+                errorMessage = throwable.message
             ) }
         }.launchIn(viewModelScope)
     }
